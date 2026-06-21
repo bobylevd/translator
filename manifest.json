@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "In-Place Translator (DE→EN)",
+  "version": "0.1.0",
+  "description": "Translate German pages to English in place, without reloading. Preserves form input, scroll position, and dynamic content.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "translator@dimas.od",
+      "strict_min_version": "128.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  },
+  "permissions": ["activeTab", "scripting", "storage", "webNavigation"],
+  "host_permissions": ["<all_urls>"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
+  },
+  "background": {
+    "scripts": ["background/service-worker.js"]
+  },
+  "action": {
+    "default_title": "Translate page (DE → EN)",
+    "default_icon": "icons/icon.svg"
+  },
+  "icons": {
+    "48": "icons/icon.svg",
+    "96": "icons/icon.svg",
+    "128": "icons/icon.svg"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["vendor/*", "models/*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

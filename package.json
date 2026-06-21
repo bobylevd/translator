@@ -1,0 +1,22 @@
+{
+  "name": "firefox-translator",
+  "version": "0.1.0",
+  "description": "Firefox extension that translates German pages to English in place, without reloading.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "vendor": "bash scripts/vendor.sh",
+    "build": "node esbuild.config.mjs",
+    "watch": "node esbuild.config.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "web-ext lint --source-dir=dist --warnings-as-errors",
+    "dev": "npm run build && web-ext run --source-dir=dist",
+    "package": "npm run build && web-ext build --source-dir=dist --artifacts-dir=web-ext-artifacts --overwrite-dest"
+  },
+  "devDependencies": {
+    "@types/firefox-webext-browser": "^120.0.4",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.3",
+    "web-ext": "^8.3.0"
+  }
+}

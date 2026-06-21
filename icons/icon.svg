@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <rect width="128" height="128" rx="24" fill="#1e6091"/>
+  <text x="64" y="56" font-family="Inter, system-ui, sans-serif" font-size="28" font-weight="700" fill="#ffffff" text-anchor="middle">DE</text>
+  <path d="M40 70 L88 70 M76 60 L88 70 L76 80" stroke="#ffd166" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="64" y="110" font-family="Inter, system-ui, sans-serif" font-size="28" font-weight="700" fill="#ffffff" text-anchor="middle">EN</text>
+</svg>
