@@ -1,0 +1,53 @@
+name: Build extension
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Vendor translation assets
+        run: npm run vendor
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Package extension
+        run: npm run package
+
+      - name: Lint packaged extension
+        run: npm run lint
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: firefox-translator-${{ matrix.os }}
+          path: web-ext-artifacts/*
+          if-no-files-found: error
