@@ -8,7 +8,16 @@ type Pending = {
 let worker: Worker | null = null;
 let readyPromise: Promise<void> | null = null;
 let nextId = 1;
+let translateQueue: Promise<void> = Promise.resolve();
 const pending = new Map<number, Pending>();
+
+function resetWorker(err: Error): void {
+  worker?.terminate();
+  worker = null;
+  readyPromise = null;
+  for (const p of pending.values()) p.reject(err);
+  pending.clear();
+}
 
 function ensureWorker(): Worker {
   if (worker) return worker;
@@ -31,14 +40,12 @@ function ensureWorker(): Worker {
         }
       }
       console.error('[translator/engine] worker error:', msg.error);
+      resetWorker(new Error(msg.error));
     }
   });
   worker.addEventListener('error', e => {
     console.error('[translator/engine] worker crashed:', e.message);
-    for (const p of pending.values()) p.reject(new Error('worker crashed'));
-    pending.clear();
-    worker = null;
-    readyPromise = null;
+    resetWorker(new Error('worker crashed'));
   });
   return worker;
 }
@@ -47,16 +54,25 @@ export function ready(): Promise<void> {
   if (readyPromise) return readyPromise;
   const w = ensureWorker();
   readyPromise = new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      w.removeEventListener('message', onMessage);
+      w.removeEventListener('error', onError);
+    };
     const onMessage = (e: MessageEvent<WorkerResponse>) => {
       if (e.data.type === 'READY') {
-        w.removeEventListener('message', onMessage);
+        cleanup();
         resolve();
       } else if (e.data.type === 'ERROR' && e.data.id === undefined) {
-        w.removeEventListener('message', onMessage);
+        cleanup();
         reject(new Error(e.data.error));
       }
     };
+    const onError = (e: ErrorEvent) => {
+      cleanup();
+      reject(new Error(e.message || 'worker crashed during init'));
+    };
     w.addEventListener('message', onMessage);
+    w.addEventListener('error', onError);
     const req: WorkerRequest = {
       type: 'INIT',
       urls: {
@@ -68,11 +84,14 @@ export function ready(): Promise<void> {
       },
     };
     w.postMessage(req);
+  }).catch(err => {
+    resetWorker(err instanceof Error ? err : new Error(String(err)));
+    throw err;
   });
   return readyPromise;
 }
 
-export async function translate(strings: string[], html = false): Promise<string[]> {
+async function translateNow(strings: string[], html: boolean): Promise<string[]> {
   if (strings.length === 0) return [];
   await ready();
   const w = ensureWorker();
@@ -82,4 +101,10 @@ export async function translate(strings: string[], html = false): Promise<string
     const req: WorkerRequest = { type: 'TRANSLATE', id, strings, html };
     w.postMessage(req);
   });
+}
+
+export function translate(strings: string[], html = false): Promise<string[]> {
+  const job = translateQueue.then(() => translateNow(strings, html));
+  translateQueue = job.then(() => undefined, () => undefined);
+  return job;
 }

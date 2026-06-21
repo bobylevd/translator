@@ -1,8 +1,14 @@
 # Firefox Extension: DE→EN In-Place Translator
 
-**Status**: Draft (interview mode, direct plan)
+**Status**: V1 candidate (reviewed 2026-06-21)
 **Created**: 2026-05-11
 **Owner**: dimas.od@gmail.com
+
+Current state:
+- Phases 1-7 are implemented in the repo.
+- Phases 4-6 are implemented in `src/content/main.ts`, `walker.ts`, `store.ts`, and `skip-rules.ts` rather than the originally planned `replace.ts` / `observer.ts` split.
+- Phase 8 coverage is implemented with Node's built-in test runner plus a direct Bergamot smoke/perf check. Fixture pages live under `tests/fixtures/`.
+- Phase 9 docs and unsigned package build are implemented. AMO signing remains out of scope for v1.
 
 ---
 
@@ -63,7 +69,7 @@ Each criterion is testable manually or via automated test.
 │ - Owns Bergamot engine (singleton, lazy-loaded)            │
 │ - Holds DE→EN model in memory after first use              │
 │ - Per-tab state: { idle | translating | translated }       │
-│ - Message router: TRANSLATE_BATCH, RESTORE, GET_STATE      │
+│ - Message router: TRANSLATE_BATCH, TRANSLATE_PAGE, RESTORE │
 │ - Sets badge text on browser.action                         │
 └────────────────────────────────────────────────────────────┘
         ▲                                          │
@@ -76,7 +82,7 @@ Each criterion is testable manually or via automated test.
 │ - DOM walker: TreeWalker over body, skip blocked tags      │
 │ - Recurse into open shadow roots and same-origin iframes   │
 │ - Stash original text in WeakMap<Node, string>             │
-│ - Chunk text nodes into ~200-string batches → background   │
+│ - Chunk text nodes into 128-string batches → background    │
 │ - Replace nodeValue on receipt                             │
 │ - MutationObserver for SPA / dynamic content               │
 │ - Idempotent: re-toggle restores from WeakMap              │
@@ -84,7 +90,7 @@ Each criterion is testable manually or via automated test.
                           │
                           ▼
 ┌────────────────────────────────────────────────────────────┐
-│ Bergamot WASM (vendor/bergamot-translator-worker.{js,wasm})│
+│ Bergamot WASM (vendor/bergamot-translator.{js,wasm})       │
 │ - Loaded inside an offscreen-style Worker (background)     │
 │ - bergamot-translator API: BlockingService + TranslationModel│
 │ - Model files bundled in extension at models/deen/         │
@@ -128,16 +134,17 @@ translator/
 │       ├── messages.ts          # typed message constants + types
 │       └── log.ts               # gated console logging
 ├── vendor/
-│   ├── bergamot-translator-worker.js
-│   └── bergamot-translator-worker.wasm
+│   ├── bergamot-translator.js
+│   └── bergamot-translator.wasm
 ├── models/
 │   └── deen/
 │       ├── model.deen.intgemm.alphas.bin
 │       ├── lex.50.50.deen.s2t.bin
 │       └── vocab.deen.spm
 ├── tests/
-│   ├── fixtures/                # test HTML pages with DE text, shadow DOM, etc.
-│   └── e2e/                     # web-ext + playwright smoke tests
+│   ├── fixtures/                # manual fixture pages with DE text, shadow DOM, iframe
+│   ├── smoke/                   # direct Bergamot smoke/perf check
+│   └── unit/                    # Node test runner coverage
 └── web-ext-config.js
 ```
 
@@ -162,18 +169,20 @@ TypeScript chosen for: typed messages between content/background (critical for c
 
 **Files**: `manifest.json`, `package.json`, `tsconfig.json`, `web-ext-config.js`, `esbuild.config.mjs`.
 
-### Phase 2 — Vendor Bergamot + DE→EN model (~2 hr)
+### Phase 2 — Vendor Bergamot + DE→EN model (~2 hr) — implemented
 1. Download prebuilt Bergamot WASM artifacts from `https://github.com/mozilla/firefox-translations-models` (or `browsermt/bergamot-translator` releases).
-2. Place `bergamot-translator-worker.js` + `.wasm` under `vendor/`.
+2. Place `bergamot-translator.js` + `.wasm` under `vendor/`.
 3. Place DE→EN model files (`model.deen.intgemm.alphas.bin`, `lex.50.50.deen.s2t.bin`, `vocab.deen.spm`) under `models/deen/`.
 4. Add these paths to `web_accessible_resources` in manifest so the Worker can fetch them.
 5. Document in `README.md` exactly which release/version was vendored and how to refresh.
 
-**Risk**: Bergamot WASM model format and worker API can change between releases. Pin a specific tag and check it in (do not depend on a CDN).
+**Repo note**: `vendor/` and `models/` are gitignored and restored with `npm run vendor`; CI must run that before build/package.
 
-### Phase 3 — Background engine (~3 hr)
+**Risk**: Bergamot WASM model format and worker API can change between releases. The model, WASM binary, and JS glue are checksum-pinned in `scripts/vendor.sh`.
+
+### Phase 3 — Background engine (~3 hr) — implemented
 1. `src/background/engine.worker.ts`: dedicated Worker that:
-   - Loads Bergamot WASM via `importScripts(browser.runtime.getURL('vendor/bergamot-translator-worker.js'))` or ES module import.
+   - Loads Bergamot WASM via `importScripts(browser.runtime.getURL('vendor/bergamot-translator.js'))`.
    - Initializes `BlockingService` and loads the DE→EN `TranslationModel` (fetch model files via `browser.runtime.getURL` → ArrayBuffer).
    - Exposes `postMessage({ type: 'TRANSLATE', payload: string[] })` → replies with `string[]` aligned to input.
 2. `src/background/engine.ts`: thin wrapper that owns the Worker, queues requests, and resolves Promises.
@@ -187,7 +196,13 @@ TypeScript chosen for: typed messages between content/background (critical for c
 
 **Files**: `src/background/{service-worker,engine,engine.worker,tab-state}.ts`, `src/shared/messages.ts`.
 
-### Phase 4 — Content script: walker, skip rules, store (~3 hr)
+Review notes:
+- `engine.worker.ts` loads Bergamot, aligned model buffers, and exposes `TRANSLATE`.
+- `engine.ts` lazy-starts the worker, serializes translation batches, and resets after worker/init failure.
+- `service-worker.ts` injects content scripts, routes `TRANSLATE_BATCH`, and toggles translate/restore state.
+- `tab-state.ts` drives idle/translating/translated badge text.
+
+### Phase 4 — Content script: walker, skip rules, store (~3 hr) — implemented
 1. `src/content/skip-rules.ts`: predicates `shouldSkipElement(el)` and `shouldSkipText(node)`.
    - Element skip: tag in `{SCRIPT, STYLE, NOSCRIPT, CODE, PRE, KBD, SAMP, TEXTAREA}`, `translate="no"`, `classList.contains('notranslate')`, `isContentEditable`.
    - Text skip: empty/whitespace-only, pure-number, pure-URL.
@@ -200,7 +215,7 @@ TypeScript chosen for: typed messages between content/background (critical for c
 
 **Files**: `src/content/{walker,skip-rules,store}.ts`.
 
-### Phase 5 — Translate flow + apply (~2 hr)
+### Phase 5 — Translate flow + apply (~2 hr) — implemented
 1. `src/content/replace.ts`:
    - Collect all targets from walker into `Array<{ kind: 'text', node: Text } | { kind: 'attr', el: Element, name: string }>`.
    - Extract source strings; chunk into batches of ~150.
@@ -215,7 +230,9 @@ TypeScript chosen for: typed messages between content/background (critical for c
 
 **Files**: `src/content/{replace,main}.ts`.
 
-### Phase 6 — MutationObserver for dynamic content (~2 hr)
+**Repo note**: The translate/apply flow is implemented directly in `src/content/main.ts`; no separate `replace.ts` file is used.
+
+### Phase 6 — MutationObserver for dynamic content (~2 hr) — implemented
 1. `src/content/observer.ts`:
    - Watch `document.body` with `{ childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['placeholder'] }`.
    - Debounce mutations into 100ms windows.
@@ -226,7 +243,9 @@ TypeScript chosen for: typed messages between content/background (critical for c
 
 **Files**: `src/content/observer.ts`.
 
-### Phase 7 — Toolbar UX & state ($&approx; 1 hr)
+**Repo note**: Observer logic is implemented directly in `src/content/main.ts`; it observes `document.body`, open shadow roots, and same-origin iframe bodies.
+
+### Phase 7 — Toolbar UX & state (~1 hr) — implemented
 1. Icon states (use badge color/text):
    - idle: no badge
    - translating: spinner-like "…" badge, orange background
@@ -236,20 +255,36 @@ TypeScript chosen for: typed messages between content/background (critical for c
 
 **Files**: `src/background/service-worker.ts` (badge logic).
 
-### Phase 8 — Tests (~2 hr)
-1. Unit tests (vitest) for:
+### Phase 8 — Tests (~2 hr) — implemented
+1. Unit tests for:
    - `skip-rules` — table-driven cases
    - `walker` — fixture HTML strings → expected target lists
    - `store` — original/restore round-trip
-2. E2E smoke tests (playwright + web-ext):
-   - Load extension into a Firefox instance
-   - Open `tests/fixtures/de-page.html`
-   - Click action → assert text translated and form input preserved
-   - Click action again → assert restored
-   - Trigger dynamic insertion → assert auto-translated
-3. Hand-test matrix: Wikipedia DE, Spiegel, ImmoScout24 (forms!), a custom-element demo.
+2. Content-flow integration smoke:
+   - Load the real content entry with fake DOM/browser APIs
+   - Translate fixture DOM → assert text, placeholder, and button labels translate while input value is preserved
+   - Trigger dynamic insertion → assert observer translates it
+   - Restore → assert original strings return
+   - Translate again → assert restored nodes can be translated a second time
+3. Bergamot smoke/perf:
+   - Load vendored JS/WASM/model files directly
+   - Translate `Hallo Welt.` → `Hello world.`
+   - Translate one 128-string batch under the 8s gate
+4. Headless Firefox load:
+   - `web-ext run` against `dist/` with Firefox 151.0.3 installs the temporary add-on successfully.
 
-### Phase 9 — Docs & release ($&approx; 1 hr)
+**Repo note**: Tests use Node's built-in runner instead of Vitest/Playwright to avoid adding test-only dependencies:
+- `tests/unit/skip-rules.test.mjs`
+- `tests/unit/walker.test.mjs`
+- `tests/unit/store.test.mjs`
+- `tests/unit/tab-state.test.mjs`
+- `tests/unit/content-flow.test.mjs`
+- `tests/unit/service-worker.test.mjs`
+- `tests/smoke/bergamot-smoke.mjs`
+- `tests/fixtures/de-page.html`
+- `tests/fixtures/inner.html`
+
+### Phase 9 — Docs & release (~1 hr) — implemented for unsigned local package
 1. `README.md`: install, dev, build, vendor refresh instructions, known limits.
 2. `npm run build` → `web-ext build` → unsigned XPI for self-install via `about:debugging` or signed for AMO.
 3. (Out of v1) AMO submission requires Mozilla review of WASM blobs; budget extra time when ready.

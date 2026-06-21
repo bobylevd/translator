@@ -34,31 +34,11 @@ export function collectTargets(root: ParentNode): Target[] {
 }
 
 function walk(root: ParentNode, out: Target[]): void {
+  if (root instanceof Element && shouldSkipElement(root)) return;
+
   const doc = (root as Node).ownerDocument ?? document;
 
-  // Pass 1: text nodes (reject subtree of skip elements).
-  const textWalker = doc.createTreeWalker(root as Node, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
-    acceptNode(node) {
-      if (node.nodeType === Node.ELEMENT_NODE) {
-        return shouldSkipElement(node as Element) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_SKIP;
-      }
-      const text = (node as Text).data;
-      return shouldSkipText(text) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
-    },
-  });
-  let n: Node | null;
-  while ((n = textWalker.nextNode())) {
-    const t = n as Text;
-    const { leading, body, trailing } = splitWhitespace(t.data);
-    if (body.length === 0) continue;
-    out.push({ kind: 'text', node: t, original: t.data, leading, body, trailing });
-  }
-
-  // Pass 2: elements (accept all, for attribute targets + shadow/iframe recursion).
-  const elWalker = doc.createTreeWalker(root as Node, NodeFilter.SHOW_ELEMENT);
-  let e: Node | null;
-  while ((e = elWalker.nextNode())) {
-    const el = e as Element;
+  function addElementTargets(el: Element): void {
     for (const attr of attrTargetsFor(el)) {
       const val = el.getAttribute(attr);
       if (val === null) continue;
@@ -79,5 +59,35 @@ function walk(root: ParentNode, out: Target[]): void {
         // cross-origin — skip
       }
     }
+  }
+
+  // Pass 1: text nodes (reject subtree of skip elements).
+  const textWalker = doc.createTreeWalker(root as Node, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        return shouldSkipElement(node as Element) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_SKIP;
+      }
+      const text = (node as Text).data;
+      return shouldSkipText(text) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  let n: Node | null;
+  while ((n = textWalker.nextNode())) {
+    const t = n as Text;
+    const { leading, body, trailing } = splitWhitespace(t.data);
+    if (body.length === 0) continue;
+    out.push({ kind: 'text', node: t, original: t.data, leading, body, trailing });
+  }
+
+  // Pass 2: elements (attributes + shadow/iframe recursion, rejecting skipped subtrees).
+  if (root instanceof Element) addElementTargets(root);
+  const elWalker = doc.createTreeWalker(root as Node, NodeFilter.SHOW_ELEMENT, {
+    acceptNode(node) {
+      return shouldSkipElement(node as Element) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  let e: Node | null;
+  while ((e = elWalker.nextNode())) {
+    addElementTargets(e as Element);
   }
 }

@@ -1,6 +1,7 @@
 node_modules/
 dist/
 web-ext-artifacts/
+.tmp-tests/
 vendor/
 models/
 *.log

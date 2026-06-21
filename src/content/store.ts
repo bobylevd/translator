@@ -33,7 +33,8 @@ export function remember(target: Target): void {
 export function restoreAll(): void {
   for (const node of touchedTexts) {
     const orig = textOriginals.get(node);
-    if (orig !== undefined) node.data = orig;
+    if (orig !== undefined && node.isConnected) node.data = orig;
+    textOriginals.delete(node);
   }
   touchedTexts.clear();
 
@@ -41,7 +42,9 @@ export function restoreAll(): void {
     const m = attrOriginals.get(el);
     if (!m) continue;
     const orig = m.get(attr);
-    if (orig !== undefined) el.setAttribute(attr, orig);
+    if (orig !== undefined && el.isConnected) el.setAttribute(attr, orig);
+    m.delete(attr);
+    if (m.size === 0) attrOriginals.delete(el);
   }
   touchedAttrs.clear();
 }

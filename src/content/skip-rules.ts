@@ -6,6 +6,7 @@ const SKIP_TAGS = new Set([
   'PRE',
   'KBD',
   'SAMP',
+  'TEXTAREA',
   'CANVAS',
   'SVG',
   'MATH',
@@ -38,6 +39,7 @@ export function shouldSkipText(text: string): boolean {
 const BUTTON_INPUT_TYPES = new Set(['submit', 'button', 'reset']);
 
 export function attrTargetsFor(el: Element): ReadonlyArray<string> {
+  if (el.hasAttribute('disabled')) return [];
   if (el.tagName === 'INPUT') {
     const type = (el.getAttribute('type') ?? 'text').toLowerCase();
     if (BUTTON_INPUT_TYPES.has(type)) return ['value', 'placeholder'];

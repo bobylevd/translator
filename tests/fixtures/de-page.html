@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8">
+    <title>Translator fixture</title>
+  </head>
+  <body>
+    <main>
+      <h1>Hallo Welt</h1>
+      <p id="body-text">Dies ist ein deutscher Testsatz.</p>
+      <input id="search" placeholder="Suche eingeben">
+      <button id="button">Absenden</button>
+      <select id="select">
+        <option>Erste Auswahl</option>
+      </select>
+      <pre id="code">Dieser Quelltext bleibt deutsch.</pre>
+      <span id="no-translate" translate="no">Nicht übersetzen</span>
+      <x-card id="card"></x-card>
+      <iframe id="frame" src="./inner.html"></iframe>
+    </main>
+    <script>
+      customElements.define('x-card', class extends HTMLElement {
+        constructor() {
+          super();
+          const root = this.attachShadow({ mode: 'open' });
+          const p = document.createElement('p');
+          p.id = 'shadow-text';
+          p.textContent = 'Text im Schatten';
+          root.append(p);
+        }
+      });
+
+      window.addDynamicGermanText = () => {
+        const p = document.createElement('p');
+        p.id = 'dynamic-text';
+        p.textContent = 'Dynamischer deutscher Text';
+        document.querySelector('main').append(p);
+      };
+    </script>
+  </body>
+</html>

@@ -9,6 +9,8 @@
     "build": "node esbuild.config.mjs",
     "watch": "node esbuild.config.mjs --watch",
     "typecheck": "tsc --noEmit",
+    "test:build": "esbuild src/content/main.ts src/content/skip-rules.ts src/content/walker.ts src/content/store.ts src/background/service-worker.ts src/background/tab-state.ts --outdir=.tmp-tests --format=esm --platform=browser --target=es2022 --bundle",
+    "test": "npm run test:build && node --test tests/unit/*.test.mjs && node tests/smoke/bergamot-smoke.mjs",
     "lint": "web-ext lint --source-dir=dist --warnings-as-errors",
     "dev": "npm run build && web-ext run --source-dir=dist",
     "package": "npm run build && web-ext build --source-dir=dist --artifacts-dir=web-ext-artifacts --overwrite-dest"

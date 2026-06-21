@@ -2,28 +2,23 @@ import { MSG, type AnyMsg, type TranslateBatchReply } from '../shared/messages.j
 import { ready, translate } from './engine.js';
 import * as tabState from './tab-state.js';
 
-async function injectAllFrames(tabId: number): Promise<void> {
+interface ActionReply {
+  ok: boolean;
+  error?: string;
+}
+
+async function injectContentScript(tabId: number): Promise<void> {
   await browser.scripting.executeScript({
-    target: { tabId, allFrames: true },
+    target: { tabId },
     files: ['content/main.js'],
     injectImmediately: true,
   });
 }
 
-async function frameIds(tabId: number): Promise<number[]> {
-  try {
-    const frames = await browser.webNavigation.getAllFrames({ tabId });
-    return (frames ?? []).map(f => f.frameId);
-  } catch {
-    return [0];
-  }
-}
-
-async function broadcast(tabId: number, msg: object): Promise<void> {
-  const ids = await frameIds(tabId);
-  await Promise.allSettled(
-    ids.map(frameId => browser.tabs.sendMessage(tabId, msg, { frameId })),
-  );
+async function sendToPage(tabId: number, msg: object): Promise<ActionReply> {
+  const reply = (await browser.tabs.sendMessage(tabId, msg, { frameId: 0 })) as ActionReply | undefined;
+  if (!reply?.ok) throw new Error(reply?.error ?? 'content script did not acknowledge action');
+  return reply;
 }
 
 async function handleAction(tab: browser.tabs.Tab): Promise<void> {
@@ -34,21 +29,22 @@ async function handleAction(tab: browser.tabs.Tab): Promise<void> {
   if (phase === 'translating') return;
 
   if (phase === 'translated') {
-    await tabState.set(tabId, 'idle');
     try {
-      await broadcast(tabId, { type: MSG.RESTORE_PAGE });
+      await sendToPage(tabId, { type: MSG.RESTORE_PAGE });
     } catch (err) {
       console.error('[translator/bg] restore failed:', err);
+    } finally {
+      await tabState.set(tabId, 'idle');
     }
     return;
   }
 
   await tabState.set(tabId, 'translating');
   try {
-    await injectAllFrames(tabId);
+    await injectContentScript(tabId);
     await ready();
     const t0 = performance.now();
-    await broadcast(tabId, { type: MSG.TRANSLATE_PAGE });
+    await sendToPage(tabId, { type: MSG.TRANSLATE_PAGE });
     const ms = Math.round(performance.now() - t0);
     console.log(`[translator/bg] page translated in ${ms}ms`);
     await tabState.set(tabId, 'translated');
@@ -70,5 +66,10 @@ browser.action.onClicked.addListener(tab => {
 });
 
 browser.tabs.onRemoved.addListener(tabId => tabState.forget(tabId));
+browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === 'loading') {
+    tabState.set(tabId, 'idle').catch(err => console.error('[translator/bg] failed to reset tab state:', err));
+  }
+});
 
 console.log('[translator/bg] background loaded');
