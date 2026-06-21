@@ -2,6 +2,10 @@ name: Build extension
 
 on:
   push:
+    tags:
+      - "v*"
+    branches:
+      - "**"
   pull_request:
   workflow_dispatch:
 
@@ -47,3 +51,47 @@ jobs:
           name: firefox-translator
           path: web-ext-artifacts/*
           if-no-files-found: error
+
+  sign:
+    name: Sign and submit to AMO
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Vendor translation assets
+        run: npm run vendor
+
+      - name: Build extension
+        run: npm run build
+
+      - name: Sign and submit to AMO
+        run: >-
+          npx web-ext sign
+          --source-dir=dist
+          --artifacts-dir=web-ext-artifacts
+          --channel=listed
+          --api-key="$AMO_JWT_ISSUER"
+          --api-secret="$AMO_JWT_SECRET"
+        env:
+          AMO_JWT_ISSUER: ${{ secrets.JWT_ISSUER }}
+          AMO_JWT_SECRET: ${{ secrets.JWT_SECRET }}
+
+      - name: Upload signed artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firefox-translator-signed
+          path: web-ext-artifacts/*.xpi
+          if-no-files-found: warn
