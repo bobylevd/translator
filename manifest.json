@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "In-Place Translator",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Translate pages in place with downloadable local language models. Preserves form input, scroll position, and dynamic content.",
   "browser_specific_settings": {
     "gecko": {

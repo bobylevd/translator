@@ -1,6 +1,6 @@
 {
   "name": "firefox-translator",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Firefox extension that translates pages in place with downloadable local language models.",
   "private": true,
   "type": "module",
