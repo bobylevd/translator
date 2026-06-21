@@ -27,9 +27,10 @@ test('tab state drives badge text, color, and tooltip', async () => {
   assert.deepEqual(calls.at(-2), ['color', { tabId: 7, color: '#e67e22' }]);
   assert.deepEqual(calls.at(-1), ['title', { tabId: 7, title: 'Translating page…' }]);
 
-  await tabState.set(7, 'translated');
+  await tabState.set(7, 'translated', 'fr');
   assert.equal(tabState.get(7), 'translated');
-  assert.deepEqual(calls.at(-1), ['title', { tabId: 7, title: 'Restore original German text' }]);
+  assert.deepEqual(calls.at(-3), ['text', { tabId: 7, text: 'FR' }]);
+  assert.deepEqual(calls.at(-1), ['title', { tabId: 7, title: 'Restore original text (FR)' }]);
 
   tabState.forget(7);
   assert.equal(tabState.get(7), 'idle');

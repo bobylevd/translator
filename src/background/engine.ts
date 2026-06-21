@@ -1,4 +1,6 @@
+import type { LanguagePair } from '../shared/language-pairs.js';
 import type { WorkerRequest, WorkerResponse } from '../shared/worker-protocol.js';
+import type { StoredPairFile } from './model-store.js';
 
 type Pending = {
   resolve: (results: string[]) => void;
@@ -6,15 +8,17 @@ type Pending = {
 };
 
 let worker: Worker | null = null;
-let readyPromise: Promise<void> | null = null;
+let runtimeReadyPromise: Promise<void> | null = null;
 let nextId = 1;
 let translateQueue: Promise<void> = Promise.resolve();
+let loadedPairKey: string | null = null;
 const pending = new Map<number, Pending>();
 
 function resetWorker(err: Error): void {
   worker?.terminate();
   worker = null;
-  readyPromise = null;
+  runtimeReadyPromise = null;
+  loadedPairKey = null;
   for (const p of pending.values()) p.reject(err);
   pending.clear();
 }
@@ -29,6 +33,12 @@ function ensureWorker(): Worker {
       if (p) {
         pending.delete(msg.id);
         p.resolve(msg.results);
+      }
+    } else if (msg.type === 'PAIR_READY') {
+      const p = pending.get(msg.id);
+      if (p) {
+        pending.delete(msg.id);
+        p.resolve([]);
       }
     } else if (msg.type === 'ERROR') {
       if (msg.id !== undefined) {
@@ -51,9 +61,9 @@ function ensureWorker(): Worker {
 }
 
 export function ready(): Promise<void> {
-  if (readyPromise) return readyPromise;
+  if (runtimeReadyPromise) return runtimeReadyPromise;
   const w = ensureWorker();
-  readyPromise = new Promise<void>((resolve, reject) => {
+  runtimeReadyPromise = new Promise<void>((resolve, reject) => {
     const cleanup = () => {
       w.removeEventListener('message', onMessage);
       w.removeEventListener('error', onError);
@@ -74,13 +84,10 @@ export function ready(): Promise<void> {
     w.addEventListener('message', onMessage);
     w.addEventListener('error', onError);
     const req: WorkerRequest = {
-      type: 'INIT',
+      type: 'INIT_BERGAMOT',
       urls: {
         bergamotJs: browser.runtime.getURL('vendor/bergamot-translator.js'),
         wasm: browser.runtime.getURL('vendor/bergamot-translator.wasm'),
-        model: browser.runtime.getURL('models/deen/model.deen.intgemm.alphas.bin'),
-        lex: browser.runtime.getURL('models/deen/lex.50.50.deen.s2t.bin'),
-        vocab: browser.runtime.getURL('models/deen/vocab.deen.spm'),
       },
     };
     w.postMessage(req);
@@ -88,23 +95,45 @@ export function ready(): Promise<void> {
     resetWorker(err instanceof Error ? err : new Error(String(err)));
     throw err;
   });
-  return readyPromise;
+  return runtimeReadyPromise;
 }
 
-async function translateNow(strings: string[], html: boolean): Promise<string[]> {
+export async function loadPair(pair: LanguagePair, files: StoredPairFile[]): Promise<void> {
+  await ready();
+  if (loadedPairKey === pair.key) return;
+  const w = ensureWorker();
+  const id = nextId++;
+  await new Promise<void>((resolve, reject) => {
+    pending.set(id, { resolve: () => resolve(), reject });
+    const req: WorkerRequest = {
+      type: 'LOAD_PAIR',
+      id,
+      pair: {
+        key: pair.key,
+        fromLang: pair.fromLang,
+        toLang: pair.toLang,
+        files,
+      },
+    };
+    w.postMessage(req, files.map(file => file.buffer));
+  });
+  loadedPairKey = pair.key;
+}
+
+async function translateNow(pairKey: string, strings: string[], html: boolean): Promise<string[]> {
   if (strings.length === 0) return [];
   await ready();
   const w = ensureWorker();
   const id = nextId++;
   return new Promise<string[]>((resolve, reject) => {
     pending.set(id, { resolve, reject });
-    const req: WorkerRequest = { type: 'TRANSLATE', id, strings, html };
+    const req: WorkerRequest = { type: 'TRANSLATE', id, pairKey, strings, html };
     w.postMessage(req);
   });
 }
 
-export function translate(strings: string[], html = false): Promise<string[]> {
-  const job = translateQueue.then(() => translateNow(strings, html));
+export function translate(pairKey: string, strings: string[], html = false): Promise<string[]> {
+  const job = translateQueue.then(() => translateNow(pairKey, strings, html));
   translateQueue = job.then(() => undefined, () => undefined);
   return job;
 }

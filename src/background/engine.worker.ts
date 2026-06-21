@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 
-import type { InitUrls, WorkerRequest, WorkerResponse } from '../shared/worker-protocol.js';
+import type { WorkerPairFile, WorkerRequest, WorkerResponse } from '../shared/worker-protocol.js';
 
 declare const importScripts: (...urls: string[]) => void;
 
@@ -88,6 +88,9 @@ let bergamot: BergamotModule | null = null;
 let translationModel: TranslationModel | null = null;
 let translationService: BlockingService | null = null;
 let initPromise: Promise<void> | null = null;
+let loadedPairKey: string | null = null;
+let modelMemories: AlignedMemory[] = [];
+let vocabList: AlignedMemoryList | null = null;
 
 function send(msg: WorkerResponse): void {
   swSelf.postMessage(msg);
@@ -105,7 +108,7 @@ function allocateAligned(mod: BergamotModule, buf: ArrayBuffer, alignment: numbe
   return mem;
 }
 
-async function init(urls: InitUrls): Promise<void> {
+async function init(urls: { bergamotJs: string; wasm: string }): Promise<void> {
   if (initPromise) return initPromise;
   initPromise = (async () => {
     importScripts(urls.bergamotJs);
@@ -131,38 +134,72 @@ async function init(urls: InitUrls): Promise<void> {
       }
     });
 
-    const [modelBuf, lexBuf, vocabBuf] = await Promise.all([
-      fetchToArrayBuffer(urls.model),
-      fetchToArrayBuffer(urls.lex),
-      fetchToArrayBuffer(urls.vocab),
-    ]);
-
-    const modelMem = allocateAligned(bergamot, modelBuf, ALIGNMENTS.model);
-    const lexMem = allocateAligned(bergamot, lexBuf, ALIGNMENTS.lex);
-    const vocabMem = allocateAligned(bergamot, vocabBuf, ALIGNMENTS.vocab);
-
-    const vocabList = new bergamot.AlignedMemoryList();
-    vocabList.push_back(vocabMem);
-
-    translationModel = new bergamot.TranslationModel(
-      'de',
-      'en',
-      BERGAMOT_CONFIG,
-      modelMem,
-      lexMem,
-      vocabList,
-      null,
-    );
-
     translationService = new bergamot.BlockingService({ cacheSize: 0 });
   })();
   return initPromise;
 }
 
-function translateMany(strings: string[], html: boolean): string[] {
+function unloadModel(): void {
+  translationModel?.delete();
+  translationModel = null;
+  vocabList?.delete();
+  vocabList = null;
+  for (const mem of modelMemories) mem.delete();
+  modelMemories = [];
+  loadedPairKey = null;
+}
+
+function fileBuffer(files: WorkerPairFile[], type: WorkerPairFile['type']): ArrayBuffer | null {
+  return files.find(file => file.type === type)?.buffer ?? null;
+}
+
+function loadPair(pair: { key: string; fromLang: string; toLang: string; files: WorkerPairFile[] }): void {
+  if (!bergamot || !translationService) throw new Error('bergamot not initialized');
+  if (loadedPairKey === pair.key) return;
+
+  const modelBuf = fileBuffer(pair.files, 'model');
+  if (!modelBuf) throw new Error(`Missing model buffer for ${pair.key}`);
+
+  const lexBuf = fileBuffer(pair.files, 'lex');
+  const sharedVocabBuf = fileBuffer(pair.files, 'vocab');
+  const srcVocabBuf = fileBuffer(pair.files, 'srcvocab');
+  const trgVocabBuf = fileBuffer(pair.files, 'trgvocab');
+  if (!sharedVocabBuf && (!srcVocabBuf || !trgVocabBuf)) {
+    throw new Error(`Missing vocab buffers for ${pair.key}`);
+  }
+
+  unloadModel();
+
+  const modelMem = allocateAligned(bergamot, modelBuf, ALIGNMENTS.model);
+  const lexMem = lexBuf ? allocateAligned(bergamot, lexBuf, ALIGNMENTS.lex) : null;
+  vocabList = new bergamot.AlignedMemoryList();
+  modelMemories.push(modelMem);
+  if (lexMem) modelMemories.push(lexMem);
+
+  const vocabBuffers = sharedVocabBuf ? [sharedVocabBuf] : [srcVocabBuf!, trgVocabBuf!];
+  for (const buf of vocabBuffers) {
+    const mem = allocateAligned(bergamot, buf, ALIGNMENTS.vocab);
+    vocabList.push_back(mem);
+    modelMemories.push(mem);
+  }
+
+  translationModel = new bergamot.TranslationModel(
+    pair.fromLang,
+    pair.toLang,
+    BERGAMOT_CONFIG,
+    modelMem,
+    lexMem,
+    vocabList,
+    null,
+  );
+  loadedPairKey = pair.key;
+}
+
+function translateMany(pairKey: string, strings: string[], html: boolean): string[] {
   if (!bergamot || !translationModel || !translationService) {
     throw new Error('engine not initialized');
   }
+  if (loadedPairKey !== pairKey) throw new Error(`language pair not loaded: ${pairKey}`);
   if (strings.length === 0) return [];
 
   const messages = new bergamot.VectorString();
@@ -192,14 +229,19 @@ function translateMany(strings: string[], html: boolean): string[] {
 swSelf.addEventListener('message', async (e: MessageEvent<WorkerRequest>) => {
   const msg = e.data;
   try {
-    if (msg.type === 'INIT') {
+    if (msg.type === 'INIT_BERGAMOT') {
       await init(msg.urls);
       send({ type: 'READY' });
+    } else if (msg.type === 'LOAD_PAIR') {
+      if (!initPromise) throw new Error('engine not initialized — send INIT_BERGAMOT first');
+      await initPromise;
+      loadPair(msg.pair);
+      send({ type: 'PAIR_READY', id: msg.id, pairKey: msg.pair.key });
     } else if (msg.type === 'TRANSLATE') {
-      if (!initPromise) throw new Error('engine not initialized — send INIT first');
+      if (!initPromise) throw new Error('engine not initialized — send INIT_BERGAMOT first');
       await initPromise;
       const start = performance.now();
-      const results = translateMany(msg.strings, msg.html);
+      const results = translateMany(msg.pairKey, msg.strings, msg.html);
       send({ type: 'TRANSLATED', id: msg.id, results, ms: Math.round(performance.now() - start) });
     }
   } catch (err) {

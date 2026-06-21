@@ -18,8 +18,10 @@ class FakeWorker {
   }
 
   postMessage(msg) {
-    if (msg.type === 'INIT') {
+    if (msg.type === 'INIT_BERGAMOT') {
       queueMicrotask(() => this.emit('message', { data: { type: 'READY' } }));
+    } else if (msg.type === 'LOAD_PAIR') {
+      queueMicrotask(() => this.emit('message', { data: { type: 'PAIR_READY', id: msg.id, pairKey: msg.pair.key } }));
     }
   }
 
@@ -31,7 +33,15 @@ class FakeWorker {
 }
 
 async function flushMicrotasks() {
-  for (let i = 0; i < 30; i++) await Promise.resolve();
+  for (let i = 0; i < 100; i++) await Promise.resolve();
+}
+
+async function waitFor(predicate) {
+  for (let i = 0; i < 100; i++) {
+    await Promise.resolve();
+    if (predicate()) return;
+  }
+  assert.fail('condition was not met');
 }
 
 test('service worker action injects, translates, restores, and resets on navigation', async () => {
@@ -42,9 +52,59 @@ test('service worker action injects, translates, restores, and resets on navigat
   const executeCalls = [];
   const sentMessages = [];
   const badgeCalls = [];
+  const pair = {
+    key: 'de->en@2.0',
+    fromLang: 'de',
+    toLang: 'en',
+    version: '2.0',
+    size: 3,
+    files: {
+      model: { type: 'model', name: 'model', hash: 'hash', size: 1, url: 'https://example.test/model' },
+      lex: { type: 'lex', name: 'lex', hash: 'hash', size: 1, url: 'https://example.test/lex' },
+      vocab: { type: 'vocab', name: 'vocab', hash: 'hash', size: 1, url: 'https://example.test/vocab' },
+    },
+  };
+  const storageData = {
+    'translator.selectedPairKey': pair.key,
+    'translator.installedPairs': { [pair.key]: pair },
+  };
+  const fileRecords = new Map([
+    [`${pair.key}:model`, { id: `${pair.key}:model`, pairKey: pair.key, type: 'model', buffer: new ArrayBuffer(1) }],
+    [`${pair.key}:lex`, { id: `${pair.key}:lex`, pairKey: pair.key, type: 'lex', buffer: new ArrayBuffer(1) }],
+    [`${pair.key}:vocab`, { id: `${pair.key}:vocab`, pairKey: pair.key, type: 'vocab', buffer: new ArrayBuffer(1) }],
+  ]);
 
   globalThis.Worker = FakeWorker;
   globalThis.performance = { now: () => 10 };
+  globalThis.indexedDB = {
+    open() {
+      const req = {};
+      queueMicrotask(() => {
+        req.result = {
+          close() {},
+          objectStoreNames: { contains: () => true },
+          transaction() {
+            return {
+              objectStore() {
+                return {
+                  get(id) {
+                    const getReq = {};
+                    queueMicrotask(() => {
+                      getReq.result = fileRecords.get(id);
+                      getReq.onsuccess?.();
+                    });
+                    return getReq;
+                  },
+                };
+              },
+            };
+          },
+        };
+        req.onsuccess?.();
+      });
+      return req;
+    },
+  };
   globalThis.browser = {
     runtime: {
       getURL(path) {
@@ -53,6 +113,21 @@ test('service worker action injects, translates, restores, and resets on navigat
       onMessage: {
         addListener(listener) {
           runtimeListeners.push(listener);
+        },
+      },
+    },
+    storage: {
+      local: {
+        async get(key) {
+          if (Array.isArray(key)) return Object.fromEntries(key.map(k => [k, storageData[k]]));
+          if (typeof key === 'string') return { [key]: storageData[key] };
+          return { ...storageData };
+        },
+        async set(values) {
+          Object.assign(storageData, values);
+        },
+        async remove(key) {
+          delete storageData[key];
         },
       },
     },
@@ -103,7 +178,7 @@ test('service worker action injects, translates, restores, and resets on navigat
   const lastCall = kind => badgeCalls.filter(([callKind]) => callKind === kind).at(-1);
 
   actionListeners[0]({ id: 42 });
-  await flushMicrotasks();
+  await waitFor(() => sentMessages.length === 1 && lastCall('text')?.[1]?.text === 'EN' && lastCall('title')?.[1]?.title === 'Restore original text (EN)');
 
   assert.equal(executeCalls.length, 1);
   assert.deepEqual(executeCalls[0].target, { tabId: 42 });
@@ -114,10 +189,10 @@ test('service worker action injects, translates, restores, and resets on navigat
     options: { frameId: 0 },
   });
   assert.deepEqual(lastCall('text'), ['text', { tabId: 42, text: 'EN' }]);
-  assert.deepEqual(lastCall('title'), ['title', { tabId: 42, title: 'Restore original German text' }]);
+  assert.deepEqual(lastCall('title'), ['title', { tabId: 42, title: 'Restore original text (EN)' }]);
 
   actionListeners[0]({ id: 42 });
-  await flushMicrotasks();
+  await waitFor(() => sentMessages.length === 2 && lastCall('text')?.[1]?.text === '' && lastCall('title')?.[1]?.title === 'Translate page');
 
   assert.deepEqual(sentMessages.at(-1), {
     tabId: 42,
@@ -127,7 +202,7 @@ test('service worker action injects, translates, restores, and resets on navigat
   assert.deepEqual(lastCall('text'), ['text', { tabId: 42, text: '' }]);
 
   actionListeners[0]({ id: 42 });
-  await flushMicrotasks();
+  await waitFor(() => sentMessages.length === 3 && lastCall('text')?.[1]?.text === 'EN');
   updatedListeners[0](42, { status: 'loading' });
   await flushMicrotasks();
 

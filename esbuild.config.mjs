@@ -14,6 +14,7 @@ const entries = [
   { in: 'src/background/service-worker.ts', out: 'background/service-worker' },
   { in: 'src/background/engine.worker.ts', out: 'background/engine.worker' },
   { in: 'src/content/main.ts', out: 'content/main' },
+  { in: 'src/popup/main.ts', out: 'popup/main' },
 ];
 
 const buildOptions = {
@@ -31,8 +32,9 @@ async function copyStatic() {
   const items = [
     { src: 'manifest.json', dst: 'manifest.json' },
     { src: 'icons', dst: 'icons', optional: false },
+    { src: 'popup/index.html', dst: 'popup/index.html', optional: false },
+    { src: 'popup/styles.css', dst: 'popup/styles.css', optional: false },
     { src: 'vendor', dst: 'vendor', optional: true },
-    { src: 'models', dst: 'models', optional: true },
   ];
   for (const item of items) {
     const from = resolve(root, item.src);

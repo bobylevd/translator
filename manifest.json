@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "In-Place Translator (DE→EN)",
+  "name": "In-Place Translator",
   "version": "0.1.0",
-  "description": "Translate German pages to English in place, without reloading. Preserves form input, scroll position, and dynamic content.",
+  "description": "Translate pages in place with downloadable local language models. Preserves form input, scroll position, and dynamic content.",
   "browser_specific_settings": {
     "gecko": {
       "id": "translator@dimas.od",
@@ -12,8 +12,11 @@
       }
     }
   },
-  "permissions": ["activeTab", "scripting", "storage"],
-  "host_permissions": ["<all_urls>"],
+  "permissions": ["activeTab", "scripting", "storage", "unlimitedStorage"],
+  "host_permissions": [
+    "https://firefox.settings.services.mozilla.com/*",
+    "https://firefox-settings-attachments.cdn.mozilla.net/*"
+  ],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
   },
@@ -21,7 +24,8 @@
     "scripts": ["background/service-worker.js"]
   },
   "action": {
-    "default_title": "Translate page (DE → EN)",
+    "default_title": "Translate page",
+    "default_popup": "popup/index.html",
     "default_icon": "icons/icon.svg"
   },
   "icons": {
@@ -31,7 +35,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["vendor/*", "models/deen/*"],
+      "resources": ["vendor/*"],
       "matches": ["<all_urls>"]
     }
   ]

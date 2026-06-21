@@ -1,9 +1,52 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import vm from 'node:vm';
+
+const recordsUrl = 'https://firefox.settings.services.mozilla.com/v1/buckets/main/collections/translations-models/records?_limit=10000';
+const attachmentBase = 'https://firefox-settings-attachments.cdn.mozilla.net/';
+const cacheDir = '.tmp-tests/model-cache/deen';
+
+function hex(buffer) {
+  return Array.from(new Uint8Array(buffer), byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function sha256(buffer) {
+  return hex(await crypto.subtle.digest('SHA-256', buffer));
+}
+
+async function fetchJson(url) {
+  const res = await fetch(url);
+  assert.equal(res.ok, true, `GET ${url} failed with ${res.status}`);
+  return res.json();
+}
+
+async function fileBuffer(record) {
+  await mkdir(cacheDir, { recursive: true });
+  const file = join(cacheDir, record.attachment.filename);
+  if (existsSync(file)) {
+    const cached = await readFile(file);
+    if (await sha256(cached) === record.attachment.hash) return cached.buffer.slice(cached.byteOffset, cached.byteOffset + cached.byteLength);
+  }
+
+  const url = new URL(record.attachment.location, attachmentBase).href;
+  const res = await fetch(url);
+  assert.equal(res.ok, true, `GET ${url} failed with ${res.status}`);
+  const buffer = await res.arrayBuffer();
+  assert.equal(await sha256(buffer), record.attachment.hash, `hash mismatch for ${record.name}`);
+  await writeFile(file, new Uint8Array(buffer));
+  return buffer;
+}
 
 const wasmBinary = new Uint8Array(await readFile('vendor/bergamot-translator.wasm'));
 const js = await readFile('vendor/bergamot-translator.js', 'utf8');
+const records = (await fetchJson(recordsUrl)).data.filter(record => record.fromLang === 'de' && record.toLang === 'en' && record.version === '2.0');
+const byType = new Map(records.map(record => [record.fileType, record]));
+
+for (const type of ['model', 'lex', 'vocab']) {
+  assert.ok(byType.has(type), `missing DE->EN ${type} record`);
+}
 
 const context = { console, fetch, performance, setTimeout, clearTimeout, WebAssembly };
 context.self = context;
@@ -23,7 +66,6 @@ const bergamot = await new Promise((resolve, reject) => {
   });
 });
 
-const toArrayBuffer = buf => buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 const aligned = (buf, alignment) => {
   const mem = new bergamot.AlignedMemory(buf.byteLength, alignment);
   mem.getByteArrayView().set(new Uint8Array(buf));
@@ -31,13 +73,13 @@ const aligned = (buf, alignment) => {
 };
 
 const [modelFile, lexFile, vocabFile] = await Promise.all([
-  readFile('models/deen/model.deen.intgemm.alphas.bin'),
-  readFile('models/deen/lex.50.50.deen.s2t.bin'),
-  readFile('models/deen/vocab.deen.spm'),
+  fileBuffer(byType.get('model')),
+  fileBuffer(byType.get('lex')),
+  fileBuffer(byType.get('vocab')),
 ]);
 
 const vocabList = new bergamot.AlignedMemoryList();
-vocabList.push_back(aligned(toArrayBuffer(vocabFile), 64));
+vocabList.push_back(aligned(vocabFile, 64));
 
 const config = `
 beam-size: 1
@@ -59,8 +101,8 @@ const model = new bergamot.TranslationModel(
   'de',
   'en',
   config,
-  aligned(toArrayBuffer(modelFile), 256),
-  aligned(toArrayBuffer(lexFile), 64),
+  aligned(modelFile, 256),
+  aligned(lexFile, 64),
   vocabList,
   null,
 );
